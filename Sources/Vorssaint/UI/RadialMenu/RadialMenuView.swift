@@ -124,7 +124,7 @@ struct RadialMenuView: View {
 
     @ViewBuilder
     private var discMaterial: some View {
-#if compiler(>=6.2)
+#if VORSSAINT_HAS_MACOS26_SDK
         if #available(macOS 26.0, *), liquidGlassEnabled, !reduceTransparency {
             Circle()
                 .fill(Color.clear)

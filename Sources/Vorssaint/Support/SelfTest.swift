@@ -44,7 +44,11 @@ enum SelfTest {
         }
 
         if let smc = SMCClient() {
-            let keys = smc.keys { $0.hasPrefix("Tp") || $0.hasPrefix("Te") || $0.hasPrefix("Tg") }
+            let keys = smc.keys {
+                TemperatureSensorSelector.isCPUTemperatureKey($0,
+                                                              platform: TemperatureSensorSelector.currentPlatform())
+                    || TemperatureSensorSelector.isGPUTemperatureKey($0)
+            }
             if keys.isEmpty {
                 warnings.append("no SMC temperature keys")
             } else if keys.compactMap({ smc.readValue($0) }).isEmpty {
@@ -64,10 +68,12 @@ enum SelfTest {
         // Network counters should be readable and never run backwards.
         let net1 = NetworkSampler.readCounters()
         let net2 = NetworkSampler.readCounters()
-        if net1 == NetworkCounters(), net2 == NetworkCounters() {
+        if let net1, let net2 {
+            if net2.received < net1.received || net2.sent < net1.sent {
+                failures.append("network counters decreased")
+            }
+        } else {
             warnings.append("network counters unavailable")
-        } else if net2.received < net1.received || net2.sent < net1.sent {
-            failures.append("network counters decreased")
         }
 
         let diskCounters = DiskSampler.readCounters()
@@ -171,7 +177,9 @@ enum SensorDump {
             exit(1)
         }
         let keys = smc.keys { name in
-            name.hasPrefix("Tp") || name.hasPrefix("Te") || name.hasPrefix("Tg")
+            TemperatureSensorSelector.isCPUTemperatureKey(
+                name, platform: TemperatureSensorSelector.currentPlatform())
+                || TemperatureSensorSelector.isGPUTemperatureKey(name)
                 || name.range(of: "^TB[0-9]T$", options: .regularExpression) != nil
         }
         let cpuPlatform = TemperatureSensorSelector.currentPlatform()
@@ -182,7 +190,7 @@ enum SensorDump {
             let component: String
             if key.name.hasPrefix("TB") {
                 component = "battery"
-            } else if key.name.hasPrefix("Tg") {
+            } else if TemperatureSensorSelector.isGPUTemperatureKey(key.name) {
                 component = "gpu"
             } else if hasCPUCoreSet {
                 component = TemperatureSensorSelector.isCPUCoreKey(key.name, platform: cpuPlatform) ? "cpu-core" : "cpu-aux"

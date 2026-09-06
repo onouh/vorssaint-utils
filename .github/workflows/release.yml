@@ -119,7 +119,9 @@ jobs:
           SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
         run: ./Tools/ci-setup-signing.sh
 
-      - name: Build
+      - name: Build universal app
+        env:
+          VORSSAINT_UNIVERSAL: "1"
         run: ./build.sh
 
       - name: Verify release signature

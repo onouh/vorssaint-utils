@@ -17,6 +17,17 @@ enum UpdateInstallerSupport {
         return trimmed
     }
 
+    /// Whether a downloaded app contains a slice that can run on the current
+    /// Mac. Release DMGs must be universal (or at least contain the native
+    /// slice); an ARM-only update must never replace a running Intel app.
+    static func architectureIsCompatible(_ architectures: String,
+                                         hostArchitecture: String) -> Bool {
+        let host = hostArchitecture == "i386" ? "x86_64" : hostArchitecture
+        return architectures.split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+            .contains(host)
+    }
+
     /// The installer: waits for the app to exit, verifies and mounts the DMG,
     /// stages and verifies the new bundle, swaps it in and relaunches.
     /// Arguments: $1 app path, $2 dmg path, $3 pid to wait for,
@@ -104,6 +115,13 @@ enum UpdateInstallerSupport {
                 note fail-version
                 BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$STAGE/Contents/Info.plist" 2>/dev/null)"
                 if [ "$BUNDLE_VERSION" = "$EXPECTED_VERSION" ]; then
+                    # Never replace an Intel installation with an ARM-only app.
+                    # This check runs on the staged executable before the swap.
+                    HOST_ARCH="$(/usr/bin/uname -m)"
+                    [ "$HOST_ARCH" = "i386" ] && HOST_ARCH=x86_64
+                    ARCHS="$(/usr/bin/lipo -archs "$STAGE/Contents/MacOS/Vorssaint" 2>/dev/null || true)"
+                    note fail-architecture
+                    if /usr/bin/printf '%s\n' "$ARCHS" | /usr/bin/grep -Eq "(^| )$HOST_ARCH( |$)"; then
                     # When the user disabled Gatekeeper, spctl cannot assess anything
                     # and rejects even a healthy bundle; the codesign identity check
                     # below stays as the gate in that case.
@@ -142,6 +160,7 @@ enum UpdateInstallerSupport {
                         else
                             [ -d "$BACKUP" ] && [ ! -d "$DEST" ] && /bin/mv "$BACKUP" "$DEST"
                         fi
+                    fi
                     fi
                 fi
             fi

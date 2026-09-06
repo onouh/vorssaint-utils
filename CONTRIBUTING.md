@@ -17,10 +17,13 @@ cd vorssaint-utils
 ./build.sh --install               # install into /Applications and launch
 ```
 
-You need macOS 14 or newer, Apple Silicon and the Xcode Command Line Tools. The
-build is a plain `swiftc` invocation, see `build.sh`, with no Xcode project and
-no external dependencies, reproducible by design. `Package.swift` is there so
-SwiftPM aware editors can index the code.
+You need macOS 14 or newer, an Intel (`x86_64`) or Apple Silicon (`arm64`) Mac,
+and the Xcode Command Line Tools. The build is a plain `swiftc` invocation, see
+`build.sh`, with no Xcode project and no external dependencies, reproducible by
+design. `build.sh` detects the host architecture by default; set
+`VORSSAINT_TARGET=x86_64-apple-macosx14.0` or
+`VORSSAINT_TARGET=arm64-apple-macosx14.0` to select it explicitly. `Package.swift`
+is there so SwiftPM-aware editors can index the code.
 
 Hitting a build or permission snag while developing? See the
 [troubleshooting guide](docs/TROUBLESHOOTING.md).
@@ -97,9 +100,10 @@ tests.
 
 ## Sensors on new chips
 
-Temperature mapping lives in `SystemMonitor.prepareSensorsIfNeeded()`. CPU keys
-look like `Tp…` and `Te…`, GPU is `Tg…`, and battery runs from `TB0T` to
-`TB2T`. If a new Apple Silicon generation renames the keys, run this
+Temperature mapping lives in `SystemMonitor.prepareSensorsIfNeeded()`. Apple
+Silicon CPU keys look like `Tp…` and `Te…`; Intel CPU keys commonly look like
+`TC…`. GPU keys are `Tg…` or `TG…`, and battery runs from `TB0T` to `TB2T`.
+If a new chip or Mac model exposes different keys, run this
 
 ```sh
 ./build/Vorssaint --sensors
@@ -139,11 +143,10 @@ For general help and every support channel, see [support](SUPPORT.md).
    drags in as a runtime dependency and who then carries it when that breaks,
    and how much permanent surface it adds against how many people will ever
    switch it on. Vorssaint reaches for what macOS almost does; it does not
-   grow a subsystem of its own. Intel support, hardcoded integrations with
-   particular third-party apps, a plugin system and video downloading have all
-   been declined already, and [contributing with an
-   agent](docs/AI-CONTRIBUTIONS.md) works the four through with the cases they
-   came from.
+   grow a subsystem of its own. Hardcoded integrations with particular
+   third-party apps, a plugin system and video downloading have all been
+   declined already, and [contributing with an agent](docs/AI-CONTRIBUTIONS.md)
+   works the four through with the cases they came from.
 7. Title it `type(scope): lowercase imperative phrase`, and do not add the PR
    number yourself, since squash merge appends it. Reuse a scope that already
    shows up in `git log --oneline` rather than inventing one, and leave the

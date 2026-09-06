@@ -59,7 +59,40 @@ FAN_HELPER_ID="$APP_BUNDLE_ID.fan-control"
 # Sources/NowPlayingAdapter. Staged under Contents/Frameworks, signed on its own.
 NOW_PLAYING_ADAPTER_ID="$APP_BUNDLE_ID.now-playing"
 NOW_PLAYING_ADAPTER="libVorssaintNowPlaying.dylib"
-TARGET="arm64-apple-macosx14.0"
+# Build for the host architecture by default. The app has no Apple-Silicon-only
+# source or ABI; choosing the host here makes a checkout usable on Intel Sequoia
+# without requiring every contributor to remember an override. CI and release
+# jobs can still pin a complete Swift target with VORSSAINT_TARGET.
+HOST_ARCH="$(uname -m)"
+[[ "$HOST_ARCH" == "i386" ]] && HOST_ARCH="x86_64"
+case "$HOST_ARCH" in
+    arm64|x86_64) ;;
+    *) echo "✗ Unsupported host architecture: $HOST_ARCH" >&2; exit 1 ;;
+esac
+TARGET="${VORSSAINT_TARGET:-$HOST_ARCH-apple-macosx14.0}"
+TARGET_ARCH="${TARGET%%-*}"
+# Release artifacts should carry both slices so an update cannot turn an Intel
+# installation into an unlaunchable ARM-only app. Local builds stay native unless
+# VORSSAINT_UNIVERSAL=1 is requested; the release workflow sets that explicitly.
+if [[ "${VORSSAINT_UNIVERSAL:-0}" == "1" && -z "${VORSSAINT_TARGET:-}" ]]; then
+    TARGET_ARCHES=(arm64 x86_64)
+else
+    TARGET_ARCHES=("$TARGET_ARCH")
+fi
+# Whole-module optimized Swift builds are memory intensive on Intel Macs. Keep
+# the default conservative and allow faster machines to opt into more workers.
+BUILD_JOBS="${VORSSAINT_BUILD_JOBS:-2}"
+case "$TARGET_ARCH" in
+    arm64|x86_64) ;;
+    *) echo "✗ VORSSAINT_TARGET must target arm64 or x86_64: $TARGET" >&2; exit 1 ;;
+esac
+for arch in "${TARGET_ARCHES[@]}"; do
+    case "$arch" in
+        arm64|x86_64) ;;
+        *) echo "✗ unsupported universal architecture: $arch" >&2; exit 1 ;;
+    esac
+done
+TARGET_LABEL="$(printf '%s,' "${TARGET_ARCHES[@]}" | sed 's/,$//')"
 ENTITLEMENTS="Resources/Vorssaint.entitlements"
 LEGACY_IDENTITY="Vorssaint Utils Signing"
 
@@ -191,22 +224,31 @@ if (( INSTALL && ! TEST )) && [[ "${VORSSAINT_INSTALL_CHILD:-0}" != "1" ]]; then
     exit 0
 fi
 
-# Prefer the macOS 26 SDK when present: the 27 SDK turns SwiftUI property wrappers
-# into macros (SwiftUIMacros plugin) that the Command Line Tools cannot load yet.
+# Select an SDK that is available on the host OS. A Sequoia machine may also
+# have a newer Command Line Tools SDK installed, but compiling against that SDK
+# would expose SwiftUI APIs that do not exist on macOS 15. An explicit
+# DEVELOPER_DIR remains authoritative for CI and toolchain testing.
 PINNED_SDK="/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk"
+SEQUOIA_SDK="/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk"
+HOST_MAJOR="$(sw_vers -productVersion 2>/dev/null | awk -F. '{print $1}')"
 if [[ -n "${DEVELOPER_DIR:-}" ]]; then
     SDK="$(xcrun --show-sdk-path)"
-elif [[ -d "$PINNED_SDK" ]]; then
+elif [[ "$HOST_MAJOR" == <-> ]] && (( HOST_MAJOR >= 26 )) && [[ -d "$PINNED_SDK" ]]; then
     SDK="$PINNED_SDK"
+elif [[ "$HOST_MAJOR" == <-> ]] && (( HOST_MAJOR >= 15 )) && [[ -d "$SEQUOIA_SDK" ]]; then
+    SDK="$SEQUOIA_SDK"
 else
     SDK="$(xcrun --show-sdk-path)"
 fi
+SDK_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :Version' "$SDK/SDKSettings.plist" 2>/dev/null || true)"
+SDK_MAJOR="${SDK_VERSION%%.*}"
 SDK_COMPAT_FLAGS=()
 VM_STATISTICS_COMPAT_FLAGS=(-I Sources/VMStatisticsCompat)
 HID_EVENT_SYSTEM_FLAGS=(-I Sources/HIDEventSystem)
-if [[ "$SDK" == "$PINNED_SDK" ]]; then
+if [[ "$SDK_MAJOR" == <-> ]] && (( SDK_MAJOR >= 26 )); then
+    SDK_COMPAT_FLAGS=(-D VORSSAINT_HAS_MACOS26_SDK)
     # Swift 6.4 can read the SDK 26 interfaces when given their compiler version.
-    SDK_COMPAT_FLAGS=(-Xfrontend -interface-compiler-version -Xfrontend 6.3.2)
+    SDK_COMPAT_FLAGS+=(-Xfrontend -interface-compiler-version -Xfrontend 6.3.2)
 fi
 
 # The defaults migrations under test need a real UserDefaults suite, and every
@@ -217,19 +259,28 @@ fi
 # check in the test file holds it to that), which is what makes this sweep
 # complete rather than a list to keep in step by hand.
 discard_test_preferences() {
-    local preferences="$HOME/Library/Preferences" name
-    for name in "vorss.tests." "com.vorssaint.tests."; do
-        rm -f "$preferences"/$name*.plist(N)
+    local preferences="${1:-$HOME/Library/Preferences}" name attempt
+    local survivors=0 quiet_passes=0
+    # cfprefsd can recreate an emptied domain after the first removal. Require
+    # two quiet checks, but keep a hard limit so persistent failures still fail CI.
+    for attempt in {1..10}; do
+        for name in "vorss.tests." "com.vorssaint.tests."; do
+            rm -f "$preferences"/$name*.plist(N)
+        done
+        rm -f "$preferences/metrics-tests.plist"
+        sleep 0.2
+        survivors=$(find "$preferences" -maxdepth 1 \
+            \( -name "vorss.tests.*.plist" -o -name "com.vorssaint.tests.*.plist" \
+               -o -name "metrics-tests.plist" \) 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$survivors" == "0" ]]; then
+            quiet_passes=$((quiet_passes + 1))
+            if (( quiet_passes == 2 )); then return 0; fi
+        else
+            quiet_passes=0
+        fi
     done
-    rm -f "$preferences/metrics-tests.plist"
-    local survivors
-    survivors=$(find "$preferences" -maxdepth 1 \
-        \( -name "vorss.tests.*.plist" -o -name "com.vorssaint.tests.*.plist" \
-           -o -name "metrics-tests.plist" \) 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$survivors" != "0" ]]; then
-        echo "✗ the test run left $survivors preference file(s) in $preferences" >&2
-        return 1
-    fi
+    echo "✗ test preferences did not settle in $preferences ($survivors remaining)" >&2
+    return 1
 }
 
 # --test: compile and run the standalone unit tests (pure helpers only: metrics,
@@ -242,7 +293,7 @@ if (( TEST )); then
     # The full app build below remains optimized and is the optimizer gate.
     # Unit assertions do not need optimization; avoiding it cuts most of the
     # test harness compile time without reducing the code the tests exercise.
-    swiftc -Onone -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" \
+    swiftc -Onone -j "$BUILD_JOBS" -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" \
         "${VM_STATISTICS_COMPAT_FLAGS[@]}" \
         Sources/Vorssaint/Services/Media/MediaSupport.swift \
         Sources/Vorssaint/Core/QuitProtectionSupport.swift \
@@ -280,6 +331,7 @@ if (( TEST )); then
         Sources/Vorssaint/Services/Snippets/TextSnippetSupport.swift \
         Sources/Vorssaint/Services/RadialMenu/RadialMenuSupport.swift \
         Sources/Vorssaint/Services/QuickTools/ScratchpadSupport.swift \
+        Sources/Vorssaint/Services/QuickTools/ScratchpadStore.swift \
         Sources/Vorssaint/Services/KillProcess/KillProcessSupport.swift \
         Sources/Vorssaint/Services/Recorder/RecorderSupport.swift \
         Sources/Vorssaint/Services/Recorder/RecordingSharingSupport.swift \
@@ -290,11 +342,13 @@ if (( TEST )); then
         Sources/Vorssaint/Services/Recorder/RecorderTypingTrack.swift \
         Sources/Vorssaint/Services/Recorder/RecorderTimeline.swift \
         Sources/Vorssaint/Services/Recorder/RecorderTextOverlay.swift \
+        Sources/Vorssaint/Services/Recorder/RecorderImageOverlay.swift \
         Sources/Vorssaint/Services/Recorder/RecorderBlurRegion.swift \
         Sources/Vorssaint/Services/Recorder/RecorderEditDocument.swift \
         Sources/Vorssaint/Core/AppInfo.swift \
         Sources/Vorssaint/Core/GlobalShortcut.swift \
         Sources/Vorssaint/Core/SymbolicHotKeys.swift \
+        Sources/Vorssaint/Services/SystemShortcutTakeoverSupport.swift \
         Sources/Vorssaint/Core/Localization.swift \
         Sources/Vorssaint/Core/Localizations/Strings+*.swift \
         Sources/Vorssaint/Core/FeatureStrings.swift \
@@ -314,6 +368,7 @@ if (( TEST )); then
         Sources/Vorssaint/Services/DockPreview/DockPreviewSupport.swift \
         Sources/Vorssaint/Services/Homebrew/HomebrewSupport.swift \
         Sources/Vorssaint/Services/AppUpdates/AppUpdatesSupport.swift \
+        Sources/Vorssaint/Services/AppUpdates/AppUpdateFeedSupport.swift \
         Sources/Vorssaint/Core/AppUpdateStrings.swift \
         Sources/Vorssaint/Core/DiskImageInstallerStrings.swift \
         Sources/Vorssaint/Services/DiskImageInstaller/DiskImageInstallerSupport.swift \
@@ -332,6 +387,7 @@ if (( TEST )); then
         Sources/Vorssaint/App/StatusItemAnchorSupport.swift \
         Sources/Vorssaint/Services/DockClick/DockClickSupport.swift \
         Sources/Vorssaint/Services/Finder/CutPasteProgressSupport.swift \
+        Sources/Vorssaint/Services/Finder/CutPastePrivilegeSupport.swift \
         Sources/Vorssaint/Services/Finder/FinderPasteImageSupport.swift \
         Sources/Vorssaint/Services/MiddleClick/MiddleClickSupport.swift \
         Sources/Vorssaint/Services/MouseNavigation/MouseNavigationSupport.swift \
@@ -339,6 +395,7 @@ if (( TEST )); then
         Sources/Vorssaint/Services/MouseButtons/MouseSpacesGestureSupport.swift \
         Sources/Vorssaint/Services/MouseClickDebounce/MouseClickDebounceSupport.swift \
         Sources/Vorssaint/Services/MouseExceptions/MouseAppExceptionSupport.swift \
+        Sources/Vorssaint/Services/MouseExceptions/MouseAppExceptions.swift \
         Sources/Vorssaint/Services/WindowServerSupport.swift \
         Sources/Vorssaint/Core/MouseButtonStrings.swift \
         Sources/Vorssaint/Core/MouseClickDebounceStrings.swift \
@@ -364,6 +421,7 @@ if (( TEST )); then
         Sources/Vorssaint/Services/QuickTools/QuickTogglesSupport.swift \
         Sources/Vorssaint/Services/QuickTools/ScreenshotCapturePolicy.swift \
         Sources/Vorssaint/Services/QuickTools/ScreenshotSupport.swift \
+        Sources/Vorssaint/Services/QuickTools/RecentCaptureStore.swift \
         Sources/Vorssaint/Services/QuickTools/ScreenshotSharingSupport.swift \
         Sources/Vorssaint/Services/QuickTools/WindowActivationPolicy.swift \
         Sources/Vorssaint/Services/KeyboardDebounce/KeyboardDebounceSupport.swift \
@@ -390,6 +448,7 @@ if (( TEST )); then
         Sources/Vorssaint/Services/ShellSupport.swift \
         Sources/Vorssaint/Services/Metrics/NetworkProcessSupport.swift \
         Sources/Vorssaint/Services/Metrics/NetworkSampler.swift \
+        Sources/Vorssaint/Services/Metrics/SpeedTest.swift \
         Sources/Vorssaint/Services/Metrics/PeripheralBatterySupport.swift \
         Sources/Vorssaint/Services/Metrics/DiskSupport.swift \
         Sources/Vorssaint/Services/Metrics/MonitorSamplingPolicy.swift \
@@ -408,50 +467,75 @@ if (( TEST )); then
         Sources/Vorssaint/Services/Uninstall/UninstallerSupport.swift \
         Sources/Vorssaint/Services/ManagedDownloads/WhatsAppDownloadSupport.swift \
         Tests/MetricsTests.swift \
+        Tests/RecentCaptureStoreTests.swift \
+        Tests/SpeedTestTests.swift \
         -o build/metrics-tests
     # `set -e` would end the script on a failing run before the sweep below.
     test_status=0
     ./build/metrics-tests || test_status=$?
+    ./Tests/PreferenceCleanupTests.sh || test_status=1
     discard_test_preferences || test_status=1
     exit $test_status
 fi
 
-echo "▸ Compiling ($BUILD_CONFIGURATION) against $(basename "$SDK")…"
+echo "▸ Compiling ($BUILD_CONFIGURATION, $TARGET_LABEL) against $(basename "$SDK")…"
 APP_SOURCES=(Sources/Vorssaint/**/*.swift)
-if (( DEV )); then
-    APP_OBJECT_DIR="build/objects/$EXECUTABLE"
-    mkdir -p build "$APP_OBJECT_DIR"
-    APP_OUTPUT_FILE_MAP="$APP_OBJECT_DIR/output-file-map.json"
-    write_swift_output_file_map "$APP_OUTPUT_FILE_MAP" "$APP_OBJECT_DIR" "${APP_SOURCES[@]}"
-    swiftc "${APP_OPTIMIZATION_FLAGS[@]}" -incremental -j "$(sysctl -n hw.logicalcpu)" \
-        -output-file-map "$APP_OUTPUT_FILE_MAP" \
-        -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" "${VM_STATISTICS_COMPAT_FLAGS[@]}" "${HID_EVENT_SYSTEM_FLAGS[@]}" \
-        "${BUILD_VARIANT_FLAGS[@]}" \
-        "${APP_SOURCES[@]}" -o "build/$EXECUTABLE"
+rm -rf build
+mkdir -p build
+for arch in "${TARGET_ARCHES[@]}"; do
+    ARCH_TARGET="$arch-${TARGET#*-}"
+    ARCH_BUILD_DIR="build/$arch"
+    mkdir -p "$ARCH_BUILD_DIR"
+    if (( DEV )); then
+        APP_OBJECT_DIR="build/objects/$EXECUTABLE/$arch"
+        mkdir -p "$APP_OBJECT_DIR"
+        APP_OUTPUT_FILE_MAP="$APP_OBJECT_DIR/output-file-map.json"
+        write_swift_output_file_map "$APP_OUTPUT_FILE_MAP" "$APP_OBJECT_DIR" "${APP_SOURCES[@]}"
+        swiftc "${APP_OPTIMIZATION_FLAGS[@]}" -incremental -j "$BUILD_JOBS" \
+            -output-file-map "$APP_OUTPUT_FILE_MAP" \
+            -target "$ARCH_TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" "${VM_STATISTICS_COMPAT_FLAGS[@]}" "${HID_EVENT_SYSTEM_FLAGS[@]}" \
+            "${BUILD_VARIANT_FLAGS[@]}" \
+            "${APP_SOURCES[@]}" -o "$ARCH_BUILD_DIR/$EXECUTABLE"
+    else
+        swiftc "${APP_OPTIMIZATION_FLAGS[@]}" -j "$BUILD_JOBS" \
+            -target "$ARCH_TARGET" -sdk "$SDK" \
+            "${SDK_COMPAT_FLAGS[@]}" "${VM_STATISTICS_COMPAT_FLAGS[@]}" "${HID_EVENT_SYSTEM_FLAGS[@]}" "${BUILD_VARIANT_FLAGS[@]}" \
+            "${APP_SOURCES[@]}" -o "$ARCH_BUILD_DIR/$EXECUTABLE"
+    fi
+
+    echo "▸ Compiling protected fan helper ($arch)…"
+    swiftc -O -target "$ARCH_TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" "${BUILD_VARIANT_FLAGS[@]}" \
+        Sources/Vorssaint/Services/FanControl/FanControlSupport.swift \
+        Sources/Vorssaint/Services/FanControl/FanControlXPC.swift \
+        Sources/Vorssaint/Services/SystemMonitor/SMCClient.swift \
+        Sources/Vorssaint/Services/Metrics/TemperatureSensorSelector.swift \
+        Sources/Vorssaint/Services/FanControl/FanControlHardware.swift \
+        Sources/FanControlHelper/main.swift \
+        -o "$ARCH_BUILD_DIR/$FAN_HELPER_ID"
+    if [[ "$arch" == "$HOST_ARCH" ]]; then
+        "$ARCH_BUILD_DIR/$FAN_HELPER_ID" --selftest
+    fi
+
+    echo "▸ Compiling Now Playing adapter ($arch)…"
+    swiftc -O -target "$ARCH_TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" -emit-library \
+        -module-name VorssaintNowPlaying \
+        Sources/NowPlayingAdapter/NowPlayingAdapter.swift \
+        -o "$ARCH_BUILD_DIR/$NOW_PLAYING_ADAPTER"
+done
+
+if (( ${#TARGET_ARCHES[@]} > 1 )); then
+    for product in "$EXECUTABLE" "$FAN_HELPER_ID" "$NOW_PLAYING_ADAPTER"; do
+        inputs=()
+        for arch in "${TARGET_ARCHES[@]}"; do
+            inputs+=("build/$arch/$product")
+        done
+        lipo -create "${inputs[@]}" -output "build/$product"
+    done
 else
-    rm -rf build
-    mkdir -p build
-    swiftc "${APP_OPTIMIZATION_FLAGS[@]}" -target "$TARGET" -sdk "$SDK" \
-        "${SDK_COMPAT_FLAGS[@]}" "${VM_STATISTICS_COMPAT_FLAGS[@]}" "${HID_EVENT_SYSTEM_FLAGS[@]}" "${BUILD_VARIANT_FLAGS[@]}" \
-        "${APP_SOURCES[@]}" -o "build/$EXECUTABLE"
+    cp "build/${TARGET_ARCHES[1]}/$EXECUTABLE" "build/$EXECUTABLE"
+    cp "build/${TARGET_ARCHES[1]}/$FAN_HELPER_ID" "build/$FAN_HELPER_ID"
+    cp "build/${TARGET_ARCHES[1]}/$NOW_PLAYING_ADAPTER" "build/$NOW_PLAYING_ADAPTER"
 fi
-
-echo "▸ Compiling protected fan helper…"
-swiftc -O -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" "${BUILD_VARIANT_FLAGS[@]}" \
-    Sources/Vorssaint/Services/FanControl/FanControlSupport.swift \
-    Sources/Vorssaint/Services/FanControl/FanControlXPC.swift \
-    Sources/Vorssaint/Services/SystemMonitor/SMCClient.swift \
-    Sources/Vorssaint/Services/Metrics/TemperatureSensorSelector.swift \
-    Sources/Vorssaint/Services/FanControl/FanControlHardware.swift \
-    Sources/FanControlHelper/main.swift \
-    -o "build/$FAN_HELPER_ID"
-"build/$FAN_HELPER_ID" --selftest
-
-echo "▸ Compiling Now Playing adapter…"
-swiftc -O -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" -emit-library \
-    -module-name VorssaintNowPlaying \
-    Sources/NowPlayingAdapter/NowPlayingAdapter.swift \
-    -o "build/$NOW_PLAYING_ADAPTER"
 
 echo "▸ Generating app icon…"
 swift Tools/MakeIcon.swift build/AppIcon.iconset

@@ -123,11 +123,21 @@ enum TemperatureSensorSelector {
         }
     }
 
+    /// Whether an SMC key belongs to a CPU temperature family on the selected
+    /// platform. Intel Macs expose the CPU die/proximity sensors as `TC…`,
+    /// while Apple Silicon uses the mapped `Tp…`/`Te…` families above.
     static func isCPUTemperatureKey(_ key: String,
                                     platform: CPUTemperaturePlatform) -> Bool {
         if platform == .unmappedAppleSilicon { return false }
         if key.hasPrefix("Tp") || key.hasPrefix("Te") { return true }
-        return platform == .appleM3Family && key.hasPrefix("Tf")
+        if platform == .appleM3Family && key.hasPrefix("Tf") { return true }
+        return platform == .generic && key.hasPrefix("TC")
+    }
+
+    /// Intel SMC firmware commonly capitalizes the GPU family (`TG…`),
+    /// whereas Apple Silicon and some Intel generations use `Tg…`.
+    static func isGPUTemperatureKey(_ key: String) -> Bool {
+        key.hasPrefix("Tg") || key.hasPrefix("TG")
     }
 
     static func stabilizedTemperature(_ reading: Double?,
