@@ -912,6 +912,10 @@ final class SystemMonitor: ObservableObject {
         preferredCPUKeys = cpuKeys.filter {
             TemperatureSensorSelector.isCPUCoreKey($0.name, platform: cpuTemperaturePlatform)
         }
+        // Everything that is not a verified core of this chip, swept only when
+        // the core set goes silent. 3.3.3 emptied this list for every mapped
+        // chip, which is what left a Mac carrying none of its generation's
+        // core sensors with no reading at all.
         let preferredNames = Set(preferredCPUKeys.map(\.name))
         fallbackCPUKeys = TemperatureSensorSelector.hasCPUCoreSet(platform: cpuTemperaturePlatform)
             ? []
@@ -946,8 +950,8 @@ final class SystemMonitor: ObservableObject {
         guard smc != nil else { return nil }
         // The core set decides the displayed value whenever it answers, so a
         // normal tick reads only those keys; the remaining Tp/Te keys are
-        // swept exactly when they would have mattered before the split —
-        // unknown platforms (empty core set) or a tick with no plausible
+        // swept exactly when they would have mattered before the split — a
+        // Mac without this chip's core sensors, or a tick with no plausible
         // core reading.
         var readings = temperatureReadings(of: preferredCPUKeys)
         if let value = TemperatureSensorSelector.displayedCPUTemperature(readings: readings,
