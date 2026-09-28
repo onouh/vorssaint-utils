@@ -123,7 +123,8 @@ final class FocusFollowsMouseService {
                   at: ProcessInfo.processInfo.systemUptime,
                   delayMilliseconds: delayMilliseconds),
               !MouseAppExceptions.shared.excludesPointerTarget(
-                  .focusFollowsMouse, at: evaluation.point)
+                  .focusFollowsMouse, at: evaluation.point),
+              let pointerWindowID = Self.receivingWindow(at: evaluation.point)
         else { return }
 
         // WindowServer cannot report ignoresMouseEvents. Read our windows on
@@ -135,6 +136,7 @@ final class FocusFollowsMouseService {
             guard let self else { return }
             let target = FocusFollowsMouseSupport.queryWindow(
                 in: WindowServerSupport.onScreenWindowInfo(), at: evaluation.point,
+                pointerWindowID: pointerWindowID,
                 ownProcessID: ProcessInfo.processInfo.processIdentifier,
                 clickThroughWindowIDs: clickThroughWindowIDs
             ) { self.target(at: evaluation.point, processID: $0) }
@@ -142,13 +144,20 @@ final class FocusFollowsMouseService {
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.isRunning, self.nothingIsHeldDown,
                       self.state.isCurrent(evaluation),
+                      Self.receivingWindow(at: evaluation.point) == pointerWindowID,
                       let app = NSRunningApplication(processIdentifier: target.processID),
                       app.activationPolicy == .regular, !app.isTerminated,
                       FocusFollowsMouseSupport.shouldActivate(
                           targetWindowID: target.windowID,
                           focusedWindowID: target.focusedWindowID,
                           targetAppIsFrontmost: NSWorkspace.shared.frontmostApplication?.processIdentifier
-                              == target.processID)
+                              == target.processID),
+                      // The window server reports a desktop switch only once
+                      // its animation ends, so a target it still parks on a
+                      // hidden Space is a switch in flight: the activator would
+                      // travel there and macOS replays the slide. Hover never
+                      // travels between desktops.
+                      !SpaceWindowBridge.isParkedOnHiddenSpace(target.windowID)
                 else { return }
                 WindowActivator.activate(pid: target.processID,
                                          windowID: target.windowID,
@@ -156,6 +165,17 @@ final class FocusFollowsMouseService {
                                          retry: false)
             }
         }
+    }
+
+    /// AppKit resolves the window that would receive a click, skipping
+    /// input-transparent overlays. Keep this on the main thread; the worker
+    /// receives just the ID and never needs a system-wide Accessibility query.
+    private static func receivingWindow(at axPoint: CGPoint) -> CGWindowID? {
+        guard let primary = NSScreen.screens.first else { return nil }
+        let point = CGPoint(x: axPoint.x, y: primary.frame.maxY - axPoint.y)
+        let number = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+        guard number > 0 else { return nil }
+        return CGWindowID(exactly: number)
     }
 
     private func target(at point: CGPoint, processID: pid_t) -> Target? {

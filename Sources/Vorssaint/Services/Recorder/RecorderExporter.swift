@@ -198,7 +198,8 @@ final class RecorderExporter {
         let keepsAnyAudio = document.keepsSystemAudio || document.keepsMicrophone
         guard let result = await RecorderComposition.build(from: asset,
                                                            ranges: ranges,
-                                                           includesAudio: keepsAnyAudio),
+                                                           includesAudio: keepsAnyAudio,
+                                                           playbackSpeed: document.exportTiming.speed),
               let timelineVideo = try? await result.asset.loadTracks(withMediaType: .video).first
         else { return .readFailed }
         let timeline = result.asset
@@ -253,7 +254,8 @@ final class RecorderExporter {
             frameRate: outputFrameRate,
             composer: composer,
             sourceSize: sourceSize,
-            outputSize: outputSize)
+            outputSize: outputSize,
+            playbackSpeed: document.exportTiming.speed)
         else { return .readFailed }
 
         guard let reader = try? AVAssetReader(asset: timeline),
@@ -282,6 +284,11 @@ final class RecorderExporter {
                 ])
             output.audioMix = RecorderComposition.audioMix(trackIDs: result.audioTrackIDs,
                                                            document: document)
+            if document.exportTiming.speed != 1 {
+                // Decode scaled audio edits at their new duration while
+                // preserving speech pitch, rather than relabeling PCM times.
+                output.audioTimePitchAlgorithm = .spectral
+            }
             output.alwaysCopiesSampleData = false
             if reader.canAdd(output) {
                 reader.add(output)
@@ -298,7 +305,7 @@ final class RecorderExporter {
             let preferred = Self.videoSettings(size: outputSize,
                                                frameRate: outputFrameRate,
                                                quality: document.resolvedQuality,
-                                               codec: .hevc)
+                                               codec: Self.preferredOutputCodec)
             resolved = writer.canApply(outputSettings: preferred, forMediaType: .video)
                 ? preferred
                 : Self.videoSettings(size: outputSize,
@@ -425,6 +432,22 @@ final class RecorderExporter {
             }
         }
     }
+
+    /// Intel GPUs (the integrated Iris and HD families in particular) fail HEVC
+    /// encoding with kVTVideoEncoderMalfunctionErr (-12902) while an export
+    /// renders through a custom video compositor, which the export-speed path
+    /// always does. The failure surfaces only at append time, after the whole
+    /// pipeline is running, so the canApply fallback below cannot catch it.
+    /// Compiled per architecture: Intel slices prefer H.264, which encodes
+    /// reliably, and Apple Silicon slices keep HEVC. A universal build carries
+    /// the right choice in each slice.
+    private static let preferredOutputCodec: AVVideoCodecType = {
+        #if arch(x86_64)
+        return .h264
+        #else
+        return .hevc
+        #endif
+    }()
 
     private static func videoSettings(size: CGSize,
                                       frameRate: Int,
@@ -558,7 +581,8 @@ final class RecorderExporter {
         let ranges = document.keptRanges(duration: duration)
         guard let result = await RecorderComposition.build(from: asset,
                                                            ranges: ranges,
-                                                           includesAudio: false),
+                                                           includesAudio: false,
+                                                           playbackSpeed: document.exportTiming.speed),
               let timelineVideo = try? await result.asset.loadTracks(withMediaType: .video).first
         else { return .readFailed }
         let timeline = result.asset
@@ -595,7 +619,8 @@ final class RecorderExporter {
                 frameRate: RecorderSupport.sanitizedFrameRate(frameRate),
                 composer: composer,
                 sourceSize: sourceSize,
-                outputSize: canvas)
+                outputSize: canvas,
+                playbackSpeed: document.exportTiming.speed)
             else { return .readFailed }
             generator.videoComposition = composition
         }
