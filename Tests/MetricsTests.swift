@@ -103,6 +103,7 @@ struct MetricsTests {
             ("recording", {
                 RecorderSampleTimingTests.run(suite)
                 RecorderWriterTests.run(suite)
+                RecorderCodecPreferenceTests.run(suite)
                 RecorderExportChipTests.run { suite.expect($0, $1) }
             }),
             ("network", {

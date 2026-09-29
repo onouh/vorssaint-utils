@@ -30,7 +30,9 @@ def declaration(path, prefix, scope=None):
         raise ValueError(f"Expected one declaration {prefix!r} in {path}")
     start = starts[0]
     indent = prefix[:len(prefix) - len(prefix.lstrip())]
-    end = next(i for i in range(start + 1, len(lines)) if lines[i].rstrip() == indent + "}")
+    # An immediately-invoked closure literal ends with "}()" rather than "}".
+    end = next(i for i in range(start + 1, len(lines))
+               if lines[i].rstrip() in (indent + "}", indent + "}()"))
     body = "".join(lines[start:end + 1])
     return f'#sourceLocation(file: {json.dumps(path)}, line: {start + 1})\n{body}\n#sourceLocation()\n'
 
@@ -1136,6 +1138,27 @@ def main():
           + "extension AgentUsageReadTests {\nfinal class Host: Fixture {\n"
           + declaration("Sources/Vorssaint/Services/AgentUsage/AgentUsageService.swift",
                         "    private func read(").replace("private func", "func", 1)
+          + "}\n}\n")
+
+    # The recorder codec preference is compiled per architecture (Intel
+    # slices pick H.264; Apple Silicon keeps HEVC). Expose the constants so
+    # RecorderCodecPreferenceTests can pin the compiled choice, and fail
+    # closed here if the private declarations move or change shape.
+    write("RecorderCodecClosures.swift", "import AVFoundation\n"
+          + "extension RecorderCodecPreferenceTests {\n"
+          + "    static let writerPreferredCaptureCodec: AVVideoCodecType\n"
+          + "        = RecorderWriterHost.preferredCaptureCodec\n"
+          + "    static let exporterPreferredOutputCodec: AVVideoCodecType\n"
+          + "        = RecorderExporterHost.preferredOutputCodec\n"
+          + "final class RecorderWriterHost {\n"
+          + declaration("Sources/Vorssaint/Services/Recorder/RecorderWriter.swift",
+                        "    private static let preferredCaptureCodec: AVVideoCodecType = {")
+            .replace("private static", "static", 1)
+          + "}\n"
+          + "final class RecorderExporterHost {\n"
+          + declaration("Sources/Vorssaint/Services/Recorder/RecorderExporter.swift",
+                        "    private static let preferredOutputCodec: AVVideoCodecType = {")
+            .replace("private static", "static", 1)
           + "}\n}\n")
 
     # Same-file extensions can exercise the private AppKit content view without

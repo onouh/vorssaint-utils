@@ -38,6 +38,28 @@ jobs:
       - name: Unit tests
         run: ./build.sh --test
 
+  intel-sequoia:
+    name: Intel x86_64 cross-compile & Rosetta tests
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Cross-compiles the x86_64 slices on the arm64 runner's SDK, then runs
+      # the x86_64 test binary under Rosetta, matching how the fork builds and
+      # tests on real Intel Sequoia hardware. The recorder codec preference
+      # suite pins the H.264 choice the Intel slices must keep.
+      - name: Unit tests (x86_64 binary under Rosetta)
+        run: VORSSAINT_TARGET=x86_64-apple-macosx14.0 ./build.sh --test
+
+      - name: Build
+        run: VORSSAINT_TARGET=x86_64-apple-macosx14.0 ./build.sh
+
+      - name: Selftest (x86_64 binary under Rosetta)
+        run: file build/Vorssaint | grep -F "x86_64" && ./build/Vorssaint --selftest
+
   build:
     name: Build & selftest
     runs-on: macos-26
