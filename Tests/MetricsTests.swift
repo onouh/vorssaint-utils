@@ -185,6 +185,7 @@ struct MetricsTests {
                 KeepAwakeTimerHandoffTests.run { suite.expect($0, $1) }
             }),
             ("wallpaper", { WallpaperContract.run(suite) }),
+            ("probe-temp", { ZzProbeTests.run(suite) }),
             ("emoji", { CommandBarEmojiContract.run(suite) }),
         ]
         var selected = Set<String>()

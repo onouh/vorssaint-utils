@@ -339,25 +339,21 @@ private struct NotchCalendarEventRow: View {
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(ongoing ? .mint : .white.opacity(0.7))
                     .lineLimit(1)
-            }
             Text(event.title.isEmpty ? text.untitled : event.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(ended ? 0.65 : 1))
                 .fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Group {
-                    if event.allDay {
-                        Text(text.allDay)
-                    } else if Calendar.current.isDate(event.start, inSameDayAs: day)
-                                && Calendar.current.isDate(event.end.addingTimeInterval(-1), inSameDayAs: day) {
-                        Text(event.start, format: .dateTime.hour().minute())
-                            + Text(" · ") + Text(event.end, format: .dateTime.hour().minute())
-                    } else {
-                        Text(event.start, format: .dateTime.day().month(.abbreviated).hour().minute())
-                            + Text(" → ") + Text(event.end, format: .dateTime.day().month(.abbreviated).hour().minute())
-                    }
+                if event.allDay {
+                    Text(text.allDay)
+                } else if Calendar.current.isDate(event.start, inSameDayAs: day)
+                    && Calendar.current.isDate(event.end.addingTimeInterval(-1), inSameDayAs: day) {
+                    Text(event.start, format: .dateTime.hour().minute())
+                        + Text(" · ") + Text(event.end, format: .dateTime.hour().minute())
+                } else {
+                    Text(event.start, format: .dateTime.day().month(.abbreviated).hour().minute())
+                        + Text(" → ") + Text(event.end, format: .dateTime.day().month(.abbreviated).hour().minute())
                 }
-                .fixedSize(horizontal: false, vertical: true)
                 // The mark of an event chosen to count down on its own.
                 if countdown == true {
                     Image(systemName: "timer")
