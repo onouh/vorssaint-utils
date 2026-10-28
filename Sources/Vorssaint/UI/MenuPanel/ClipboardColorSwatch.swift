@@ -8,7 +8,7 @@ import SwiftUI
 /// background; the value beside it already says the color, so it is hidden
 /// from VoiceOver.
 struct ClipboardColorSwatch: View {
-    let color: ClipboardHistoryColor
+    let color: ColorValue
     var size: CGFloat = 14
 
     var body: some View {
@@ -21,4 +21,4 @@ struct ClipboardColorSwatch: View {
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }
-}
+
