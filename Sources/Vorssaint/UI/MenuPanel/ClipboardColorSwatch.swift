@@ -21,4 +21,4 @@ struct ClipboardColorSwatch: View {
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }
-
+}
