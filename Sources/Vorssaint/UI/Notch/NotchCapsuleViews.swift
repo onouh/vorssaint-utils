@@ -638,7 +638,7 @@ struct NotchCapsuleCalendarStrip: View {
     }
 
     private static func dot(_ event: NotchCalendarEvent) -> some View {
-        Circle().fill(event.color.color)
+        Circle().fill(Color(.sRGB, red: event.color.red, green: event.color.green, blue: event.color.blue))
             .frame(width: CapsuleLayout.calendarDotSide, height: CapsuleLayout.calendarDotSide)
             .overlay { Circle().strokeBorder(.white.opacity(0.5), lineWidth: 0.5) }
     }

@@ -371,7 +371,7 @@ struct NotchLockScreenActivities: View {
             if let countdown = calendar.countdown {
                 let text = FeatureStrings.notchCalendar(l10n.language)
                 HStack(spacing: 7) {
-                    Image(systemName: "calendar").foregroundStyle(countdown.event.color.color)
+                    Image(systemName: "calendar").foregroundStyle(Color(.sRGB, red: countdown.event.color.red, green: countdown.event.color.green, blue: countdown.event.color.blue))
                     Text(NotchCalendarStrip.displayTitle(countdown.event, untitled: text.untitled))
                         .frame(maxWidth: 240, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)

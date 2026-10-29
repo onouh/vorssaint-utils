@@ -158,7 +158,7 @@ struct NotchCalendarStrip: View {
     }
 
     private static func dot(_ event: NotchCalendarEvent) -> some View {
-        Circle().fill(event.color.color).frame(width: NotchCalendarSupport.stripDotWidth,
+        Circle().fill(Color(.sRGB, red: event.color.red, green: event.color.green, blue: event.color.blue)).frame(width: NotchCalendarSupport.stripDotWidth,
                                                height: NotchCalendarSupport.stripDotWidth)
             .overlay { Circle().strokeBorder(.white.opacity(0.5), lineWidth: 0.5) }
             .accessibilityHidden(true)

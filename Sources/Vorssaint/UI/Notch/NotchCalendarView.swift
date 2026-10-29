@@ -372,13 +372,13 @@ private struct NotchCalendarEventRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 12)
         .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 2).fill(event.color.color)
+            RoundedRectangle(cornerRadius: 2).fill(Color(.sRGB, red: event.color.red, green: event.color.green, blue: event.color.blue))
                 .frame(width: 3)
                 .accessibilityHidden(true)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(event.color.color.opacity(ongoing ? 0.2 : 0.1),
+        .background(Color(.sRGB, red: event.color.red, green: event.color.green, blue: event.color.blue).opacity(ongoing ? 0.2 : 0.1)),
                     in: RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
